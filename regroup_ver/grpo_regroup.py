@@ -7,6 +7,16 @@ import numpy as np
 import torch.distributed as dist
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
+# Set rank to 0 if distributed is not initialized
+if torch.distributed.is_available() and torch.distributed.is_initialized():
+    rank = torch.distributed.get_rank()
+else:
+    rank = 0
+
+def barrier():
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        dist.barrier()
+
 model_path = "Qwen/Qwen2.5-0.5B"
 beta = 0.04
 num_pre_Q = 8
