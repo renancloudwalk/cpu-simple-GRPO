@@ -65,7 +65,7 @@ if __name__ == '__main__':
     import bottle, threading, queue
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
-    model_path = "Qwen/Qwen2.5-7B"
+    model_path = "Qwen/Qwen2.5-0.5B"
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     ref_model = AutoModelForCausalLM.from_pretrained(model_path,
