@@ -36,20 +36,30 @@ At least two GPUs are needed.
 
 ## Usage
 
+**Prerequisites:**
+- Run `huggingface-cli login` to authenticate your Hugging Face account.
+
 ### JUST two py files, ref_server.py and grpo_ref_split.py are enough!
 Run the following command:
 ``` bash
+# For GPU mode:
 CUDA_VISIBLE_DEVICES=7 python ref_server.py
+
+# For CPU-only mode (without CUDA) using Poetry:
+poetry run python ref_server.py
 ```
-This just uses one GPU to collect and run the reference model.
+This command starts the reference server, which collects data and runs the reference model.
 We use http to transport data and logits.
 They have so little data that they won't be any bottlenecks, http is the easiest to understand and has the fewest dependencies, and can be easily supported on multiple machines (we are using dozens of outdated 4090s to generate QA pairs for them!).
 
 Then, open another bash:
 ``` bash
+# For GPU training:
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6 deepspeed grpo_ref_split.py
+
+# For CPU-only training (without CUDA) using Poetry:
+poetry run python grpo_ref_split.py
 ```
-Use all other GPUs for training!
 
 All parameters are in the code. We need to try more possibilities than a fking long argparse.
 
