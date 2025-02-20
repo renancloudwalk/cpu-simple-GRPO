@@ -168,7 +168,8 @@ def GRPO_step(batch):
 
 from tqdm import tqdm
 progress = range(1, all_steps+1)
-if rank == 0: progress = tqdm(progress)
+if rank == 0:
+    progress = tqdm(progress)
 for step in progress:
     batch = get_batch()
     while batch is None:
