@@ -1,5 +1,9 @@
-## Triton kernel, modified from the implementation of Unsloth.
 import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("Triton GPU kernels are not supported on CPU. Do not import ce_kernel in CPU-only mode.")
+
+## Triton kernel, modified from the implementation of Unsloth.
 import triton
 import triton.language as tl
 

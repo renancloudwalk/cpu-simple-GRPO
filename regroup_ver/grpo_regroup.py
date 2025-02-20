@@ -178,15 +178,15 @@ def GRPO_step(batch):
 
 from tqdm import tqdm
 progress = range(1, all_steps+1)
-if torch.distributed.get_rank() == 0: progress = tqdm(progress)
+if rank == 0: progress = tqdm(progress)
 for step in progress:
     batch = get_batch()
     while batch is None:
-        generate_mode(rank=torch.distributed.get_rank())
+        generate_mode(rank=rank)
         batch = get_batch()
 
     if step % gen_steps == 0:
-        generate_mode(rank=torch.distributed.get_rank(), gen_timeout=100)
+        generate_mode(rank=rank, gen_timeout=100)
 
     B = batch['inputs'].shape[0]
     assert B % micro_batch_size == 0
@@ -202,20 +202,19 @@ for step in progress:
         except:
             traceback.print_exc()
             print('batch:', sub_batch['inputs'].shape)
-            torch.distributed.destroy_process_group()
             sys.exit()
     optimizer.step()
 
-    if torch.distributed.get_rank() == 0:
+    if rank == 0:
         progress.set_description(f"Loss: {loss.item():.6f}")
 
     if step % save_steps == 0:
-        dist.barrier()
-        if torch.distributed.get_rank() == 0:
+        barrier()
+        if rank == 0:
             print('saving model')
             save_name = f"./step_{step}"
             state_dict = model.state_dict()
             state_dict = type(state_dict)({k: v.cpu() for k, v in state_dict.items()})
             model.save_pretrained(save_name, state_dict=state_dict)
             tokenizer.save_pretrained(save_name)
-        dist.barrier()
+        barrier()
