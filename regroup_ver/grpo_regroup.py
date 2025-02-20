@@ -139,10 +139,9 @@ if 'genonly' in sys.argv:
     generate_mode(999999)
     sys.exit()
 
-import deepspeed
-engine, optimizer, _, _ = deepspeed.initialize(config=ds_config, model=model, 
-                                               model_parameters=model.parameters())
-gen_model = engine
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6)
+engine = model
+gen_model = model
 
 def get_per_token_logps(logits, input_ids):
     per_token_logps = [] # Use a loop to reduce memory peak.
@@ -192,6 +191,7 @@ for step in progress:
 
     B = batch['inputs'].shape[0]
     assert B % micro_batch_size == 0
+    optimizer.zero_grad()
     for sub in range(0, B, micro_batch_size):
         sub_batch = {'plen': batch['plen']}
         sub_batch['inputs'] = batch['inputs'][sub:sub+micro_batch_size]
@@ -199,13 +199,13 @@ for step in progress:
         sub_batch['refs'] = batch['refs'][sub:sub+micro_batch_size]
         try:
             loss = GRPO_step(sub_batch)
-            engine.backward(loss)
-            engine.step()
+            loss.backward()
         except:
             traceback.print_exc()
             print('batch:', sub_batch['inputs'].shape)
             torch.distributed.destroy_process_group()
             sys.exit()
+    optimizer.step()
 
     if torch.distributed.get_rank() == 0:
         progress.set_description(f"Loss: {loss.item():.6f}")
@@ -215,8 +215,8 @@ for step in progress:
         if torch.distributed.get_rank() == 0:
             print('saving model')
             save_name = f"./step_{step}"
-            state_dict = engine.module.state_dict()
+            state_dict = model.state_dict()
             state_dict = type(state_dict)({k: v.cpu() for k, v in state_dict.items()})
-            engine.module.save_pretrained(save_name, state_dict=state_dict)
+            model.save_pretrained(save_name, state_dict=state_dict)
             tokenizer.save_pretrained(save_name)
         dist.barrier()

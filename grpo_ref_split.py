@@ -137,14 +137,13 @@ def generate_mode(num=10, rank=0):
     print(f'{rank}: {time.time()-tic:.3f}s')
 
 if 'genonly' in sys.argv:
-    model.to('cuda')
+    model.to('cpu')
     generate_mode(999999)
     sys.exit()
 
-import deepspeed
-engine, optimizer, _, _ = deepspeed.initialize(config=ds_config, model=model, 
-                                               model_parameters=model.parameters())
-gen_model = engine
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-6)
+engine = model
+gen_model = model
 
 def get_per_token_logps(logits, input_ids):
     per_token_logps = [] # Use a loop to reduce memory peak.
@@ -193,10 +192,10 @@ for step in progress:
     while batch is None:
         generate_mode(rank=torch.distributed.get_rank())
         batch = get_batch()
-
+    optimizer.zero_grad()
     loss = GRPO_step(batch)
-    engine.backward(loss)
-    engine.step()
+    loss.backward()
+    optimizer.step()
 
     if torch.distributed.get_rank() == 0:
         progress.set_description(f"Loss: {loss.item():.6f}")
@@ -206,8 +205,8 @@ for step in progress:
         if torch.distributed.get_rank() == 0:
             print('saving model')
             save_name = f"./step_{step}"
-            state_dict = engine.module.state_dict()
+            state_dict = engine.state_dict()
             state_dict = type(state_dict)({k: v.cpu() for k, v in state_dict.items()})
-            engine.module.save_pretrained(save_name, state_dict=state_dict)
+            engine.save_pretrained(save_name, state_dict=state_dict)
             tokenizer.save_pretrained(save_name)
         dist.barrier()

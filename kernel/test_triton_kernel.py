@@ -93,10 +93,7 @@ print('grad:', model.model.layers[-1].mlp.gate_proj.weight.grad[3])
 print(f'torch: {time.time()-tic:3f}s')
 
 
-from ce_kernel import fast_log_softmax_gather
-fast_log_softmax_gather(torch.randn(1, 1, 5).to('cpu'), torch.tensor([[1]]).to('cpu'))
-# init
-get_per_token_logps = fast_log_softmax_gather
+ 
 
 print('\n-----\n')
 
