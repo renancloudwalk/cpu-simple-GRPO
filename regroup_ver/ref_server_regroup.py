@@ -69,7 +69,7 @@ if __name__ == '__main__':
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     ref_model = AutoModelForCausalLM.from_pretrained(model_path,
-            torch_dtype=torch.bfloat16, _attn_implementation="sdpa").to('cuda')
+            torch_dtype=torch.float32, _attn_implementation="sdpa").to('cpu')
     ref_model.eval()
     ref_model.requires_grad_(False)
 

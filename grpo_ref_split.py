@@ -52,7 +52,7 @@ def get_batch():
 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path, 
-        torch_dtype=torch.bfloat16, _attn_implementation="sdpa")
+        torch_dtype=torch.float32, _attn_implementation="sdpa")
 gen_model = model
 
 from datasets import load_dataset

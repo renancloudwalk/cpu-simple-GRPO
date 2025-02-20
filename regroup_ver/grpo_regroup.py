@@ -55,7 +55,7 @@ def get_batch():
 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path, 
-        torch_dtype=torch.bfloat16, _attn_implementation="sdpa")
+        torch_dtype=torch.float32, _attn_implementation="sdpa")
 gen_model = model
 
 from datasets import load_dataset
@@ -135,7 +135,7 @@ def generate_mode(num=10, rank=0, gen_timeout=999999):
     print(f'{rank}: {time.time()-tic:.3f}s')
 
 if 'genonly' in sys.argv:
-    model.to('cuda')
+    model.to('cpu')
     generate_mode(999999)
     sys.exit()
 

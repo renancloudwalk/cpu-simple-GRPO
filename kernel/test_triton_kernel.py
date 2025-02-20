@@ -39,8 +39,8 @@ def get_batch():
 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path, 
-        torch_dtype=torch.bfloat16, _attn_implementation="sdpa")
-engine = model.to('cuda')
+        torch_dtype=torch.float32, _attn_implementation="sdpa")
+engine = model.to('cpu')
 opt = torch.optim.AdamW(engine.parameters(), lr=1e-6)
 
 
@@ -94,7 +94,7 @@ print(f'torch: {time.time()-tic:3f}s')
 
 
 from ce_kernel import fast_log_softmax_gather
-fast_log_softmax_gather(torch.randn(1, 1, 5).to('cuda'), torch.tensor([[1]]).to('cuda'))
+fast_log_softmax_gather(torch.randn(1, 1, 5).to('cpu'), torch.tensor([[1]]).to('cpu'))
 # init
 get_per_token_logps = fast_log_softmax_gather
 
