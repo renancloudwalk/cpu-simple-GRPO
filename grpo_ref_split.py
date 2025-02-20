@@ -76,7 +76,20 @@ def gen_answers(prompts):
     return answers
 
 
-from math_verify import parse, verify, ExprExtractionConfig
+def parse(x, extraction_config=None):
+    try:
+        return float(x)
+    except Exception:
+        return x
+
+def verify(a, b):
+    try:
+        return float(a) == float(b)
+    except Exception:
+        return a == b
+
+class ExprExtractionConfig:
+    pass
 def reward_correct(item, answer):
     pattern = r'\d+\.\d+|\d+/\d+|\d+'
     nums = re.findall(pattern, answer) # 使用正则表达式在answer中查找所有数字
