@@ -151,8 +151,7 @@ def get_per_token_logps(logits, input_ids):
         per_token_logps.append(token_log_prob)
     return torch.stack(per_token_logps)
 
-from kernel.ce_kernel import fast_log_softmax_gather
-get_per_token_logps = fast_log_softmax_gather
+ 
 
 def GRPO_step(batch):
     prompt_length = batch['plen']
