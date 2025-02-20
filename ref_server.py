@@ -36,7 +36,7 @@ if __name__ == '__main__':
     import bottle, threading, queue
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
-    model_path = "/data2/Qwen/Qwen2.5-7B"
+    model_path = "Qwen/Qwen2.5-7B"
 
     ref_model = AutoModelForCausalLM.from_pretrained(model_path,
             torch_dtype=torch.bfloat16, _attn_implementation="sdpa").to('cuda')
@@ -89,5 +89,3 @@ if __name__ == '__main__':
                                  tensor_to_bytes(d['rewards']),
                                  tensor_to_bytes(per_token_logps)])
         result_queue.put(xdata)
-
-    

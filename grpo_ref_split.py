@@ -6,7 +6,7 @@ import numpy as np
 import torch.distributed as dist
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
-model_path = "/data2/Qwen/Qwen2.5-7B"
+model_path = "Qwen/Qwen2.5-7B"
 beta = 0.04
 num_pre_Q = 8
 Q_batch_size = 1
