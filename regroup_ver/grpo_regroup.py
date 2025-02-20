@@ -15,7 +15,7 @@ else:
 
 def barrier():
     if torch.distributed.is_available() and torch.distributed.is_initialized():
-        dist.barrier()
+        barrier()
 
 model_path = "Qwen/Qwen2.5-0.5B"
 beta = 0.04
@@ -27,26 +27,6 @@ max_prompt_length = 400
 gen_steps = 30
 save_steps = 200
 
-ds_config = {
-    "train_micro_batch_size_per_gpu": micro_batch_size,
-    "gradient_accumulation_steps": 4,
-    "optimizer": {
-        "type": "AdamW",
-        "params": { "lr": 1e-6 }
-    },
-    "bf16": {"enabled": True},
-    "zero_optimization": {
-        "stage": 1,
-        "allgather_partitions": True,
-        "allgather_bucket_size": 2e8,
-        "overlap_comm": True,
-        "reduce_scatter": True,
-        "reduce_bucket_size": 2e8,
-        "contiguous_gradients": True,
-        "stage3_gather_16bit_weights_on_model_save": True,
-        "offload_optimizer": {"device": "cpu"}
-    }
-}
 
 ref_server = "http://localhost:59875"
 from ref_server import tensor_to_bytes, bytes_to_tensor, make_bytes_list, bytes_list_to_list

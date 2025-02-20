@@ -1,13 +1,25 @@
 import torch
 
 if not torch.cuda.is_available():
-    raise RuntimeError("Triton GPU kernels are not supported on CPU. Do not import ce_kernel in CPU-only mode.")
-
-## Triton kernel, modified from the implementation of Unsloth.
-import triton
-import triton.language as tl
-
-next_power_of_2 = triton.next_power_of_2
+    # CPU mode: provide a CPU fallback or disable this module entirely
+    def fast_log_softmax_gather(logits, labels):
+        # Fallback: compute log_softmax and gather using plain PyTorch loops
+        batch, seq_len, _ = logits.shape
+        losses = []
+        for i in range(batch):
+            log_probs = logits[i].log_softmax(dim=-1)
+            loss = -torch.gather(log_probs, dim=1, index=labels[i].unsqueeze(1)).squeeze(1)
+            losses.append(loss)
+        return torch.stack(losses)
+    
+    # Expose this fallback and stop compilation of GPU kernels
+    __all__ = ["fast_log_softmax_gather"]
+else:
+    ## Triton kernel, modified from the implementation of Unsloth.
+    import triton
+    import triton.language as tl
+    
+    next_power_of_2 = triton.next_power_of_2
 
 def calculate_settings(n):
     BLOCK_SIZE = next_power_of_2(n)
