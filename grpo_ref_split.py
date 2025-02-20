@@ -193,7 +193,7 @@ if rank == 0: progress = tqdm(progress)
 for step in progress:
     batch = get_batch()
     while batch is None:
-        generate_mode(rank=torch.distributed.get_rank())
+        generate_mode(rank=rank)
         batch = get_batch()
     optimizer.zero_grad()
     loss = GRPO_step(batch)
