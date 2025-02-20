@@ -172,7 +172,7 @@ def GRPO_step(batch):
     loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
     return loss
 
-generate_mode(rank=torch.distributed.get_rank())
+generate_mode(rank=rank)
 
 from tqdm import tqdm
 progress = range(1, all_steps+1)
@@ -191,7 +191,6 @@ for step in progress:
         progress.set_description(f"Loss: {loss.item():.6f}")
 
     if step % save_steps == 0:
-        barrier()
         if rank == 0:
             print('saving model')
             save_name = f"./step_{step}"
@@ -199,4 +198,3 @@ for step in progress:
             state_dict = type(state_dict)({k: v.cpu() for k, v in state_dict.items()})
             engine.save_pretrained(save_name, state_dict=state_dict)
             tokenizer.save_pretrained(save_name)
-        barrier()
