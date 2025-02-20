@@ -14,7 +14,7 @@ else:
 
 def barrier():
     if torch.distributed.is_available() and torch.distributed.is_initialized():
-        dist.barrier()
+        barrier()
 
 model_path = "Qwen/Qwen2.5-0.5B"
 beta = 0.04
@@ -24,26 +24,6 @@ all_steps = 1000
 max_prompt_length = 400   
 save_steps = 200
 
-ds_config = {
-    "train_micro_batch_size_per_gpu": Q_batch_size*num_pre_Q,
-    "gradient_accumulation_steps": 2,
-    "optimizer": {
-        "type": "AdamW",
-        "params": { "lr": 1e-6 }
-    },
-    "bf16": {"enabled": True},
-    "zero_optimization": {
-        "stage": 2,
-        "allgather_partitions": True,
-        "allgather_bucket_size": 2e8,
-        "overlap_comm": True,
-        "reduce_scatter": True,
-        "reduce_bucket_size": 2e8,
-        "contiguous_gradients": True,
-        "stage3_gather_16bit_weights_on_model_save": True,
-        "offload_optimizer": {"device": "cpu"}
-    }
-}
 
 ref_server = "http://localhost:59875"
 from ref_server import tensor_to_bytes, bytes_to_tensor, make_bytes_list, bytes_list_to_list
@@ -196,7 +176,7 @@ generate_mode(rank=torch.distributed.get_rank())
 
 from tqdm import tqdm
 progress = range(1, all_steps+1)
-if torch.distributed.get_rank() == 0: progress = tqdm(progress)
+if rank == 0: progress = tqdm(progress)
 for step in progress:
     batch = get_batch()
     while batch is None:
@@ -207,16 +187,16 @@ for step in progress:
     loss.backward()
     optimizer.step()
 
-    if torch.distributed.get_rank() == 0:
+    if rank == 0:
         progress.set_description(f"Loss: {loss.item():.6f}")
 
     if step % save_steps == 0:
-        dist.barrier()
-        if torch.distributed.get_rank() == 0:
+        barrier()
+        if rank == 0:
             print('saving model')
             save_name = f"./step_{step}"
             state_dict = engine.state_dict()
             state_dict = type(state_dict)({k: v.cpu() for k, v in state_dict.items()})
             engine.save_pretrained(save_name, state_dict=state_dict)
             tokenizer.save_pretrained(save_name)
-        dist.barrier()
+        barrier()
