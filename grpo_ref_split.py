@@ -20,9 +20,9 @@ model_path = "Qwen/Qwen2.5-0.5B"
 beta = 0.04
 num_pre_Q = 8
 Q_batch_size = 1
-all_steps = 1000
+all_steps = 100
 max_prompt_length = 400   
-save_steps = 200
+save_steps = 10
 
 
 ref_server = "http://localhost:59875"
