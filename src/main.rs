@@ -20,7 +20,6 @@
 
 use std::io::Write;
 use std::time::Instant;
-use std::fs;
 
 use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
@@ -341,7 +340,7 @@ fn grpo_step(
     let comp_len = l.saturating_sub(batch.plen);
     if comp_len==0 || b==0 {
         // nothing to update
-        return candle_ok(Tensor::zeros(&[], f32::TYPE, device));
+        return candle_ok(Tensor::zeros(&[], DType::F32, device));
     }
 
     // build input tensor => shape [b, l]
@@ -351,7 +350,7 @@ fn grpo_step(
     let logits_all = candle_ok(policy.forward(&input_t, (l-1).max(0), None))?;
     let dims = logits_all.shape().dims();
     if dims.len()!=3 || dims[1]<1 {
-        return candle_ok(Tensor::zeros(&[], f32::TYPE, device));
+        return candle_ok(Tensor::zeros(&[], DType::F32, device));
     }
 
     // narrow => [b, l-1, vocab]
@@ -363,7 +362,7 @@ fn grpo_step(
 
     // build shifted => [b, l-1]
     if l<1 {
-        return candle_ok(Tensor::zeros(&[], f32::TYPE, device));
+        return candle_ok(Tensor::zeros(&[], DType::F32, device));
     }
     let shifted = candle_ok(input_t.narrow(1, 1, l-1))?;
 
@@ -384,7 +383,7 @@ fn grpo_step(
         }
     }
     // rebuild
-    let logprobs_t = candle_ok(Tensor::new(new3.as_slice(), device))?
+    let logprobs_t = candle_ok(Tensor::new(new3, device))?
         .reshape(&[bsz, seqm1, vocab])?;
 
     // gather => for each (b, pos) pick shifted token => out [b, l-1]
@@ -433,7 +432,7 @@ fn grpo_step(
     let group_count = b / NUM_PRE_Q;
     if group_count==0 {
         // no groups => zero
-        return candle_ok(Tensor::zeros(&[], f32::TYPE, device));
+        return candle_ok(Tensor::zeros(&[], DType::F32, device));
     }
     let rew2d = reward_t.reshape(&[group_count, NUM_PRE_Q])?;
     let arr_rew = candle_ok(rew2d.to_vec2::<f32>())?;
