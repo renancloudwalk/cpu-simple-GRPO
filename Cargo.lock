@@ -1111,11 +1111,14 @@ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 name = "grpo-finetune"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "candle-core",
  "candle-examples",
  "candle-nn",
  "candle-transformers",
  "hf-hub",
+ "rand",
+ "regex",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
