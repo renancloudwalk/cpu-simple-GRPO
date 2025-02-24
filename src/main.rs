@@ -109,6 +109,13 @@ fn load_qwen_model_and_tokenizer(
             candle_ok(varmap.load(&wf))?;
         }
     }
+    // Convert all variables to F32 if they are not already.
+    // This ensures that the model parameters match the expected F32 dtype.
+    for var in varmap.all_vars_mut() {
+        if var.dtype() != DType::F32 {
+            *var = candle_ok(var.to_dtype(DType::F32))?;
+        }
+    }
     
 
     Ok((varmap, model, tokenizer, config))
