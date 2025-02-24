@@ -109,6 +109,7 @@ fn load_qwen_model_and_tokenizer(
             candle_ok(varmap.load(&wf))?;
         }
     }
+    candle_ok(varmap.convert_all(DType::F32))?;
 
     Ok((varmap, model, tokenizer, config))
 }
