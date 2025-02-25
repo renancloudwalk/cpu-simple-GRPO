@@ -72,10 +72,12 @@ fn load_fake_gsm8k() -> Vec<QaPair> {
 }
 
 /// Helper: convert Candle’s `Result<T, candle_core::Error>` to `anyhow::Result<T>`.
+#[track_caller]
 fn candle_ok<T>(res: CandleResult<T>) -> Result<T> {
+    let loc = std::panic::Location::caller();
     match res {
         Ok(x) => Ok(x),
-        Err(e) => Err(anyhow!("[{}:{}] Candle error: {}", file!(), line!(), e)),
+        Err(e) => Err(anyhow!("[{}:{}] Candle error: {}", loc.file(), loc.line(), e)),
     }
 }
 
