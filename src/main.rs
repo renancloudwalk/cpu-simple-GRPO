@@ -80,17 +80,22 @@ fn load_qwen_model_and_tokenizer(
 ) -> Result<(VarMap, QwenModel, Tokenizer, QwenConfig)> {
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(MODEL_ID.to_string(), RepoType::Model, "main".to_string()));
+    println!("Loaded HF API and repository.");
 
     // tokenizer
     let tokenizer_path = repo.get("tokenizer.json")?;
+    println!("Found tokenizer at: {:?}", tokenizer_path);
     let tokenizer = Tokenizer::from_file(tokenizer_path.to_str().unwrap())
         .map_err(|e| anyhow!("Tokenizer load: {e}"))?;
+    println!("Tokenizer loaded successfully.");
 
     // config
     let config_path = repo.get("config.json")?;
+    println!("Found config at: {:?}", config_path);
     let config_bytes = std::fs::read(&config_path)?;
     let config: QwenConfig = serde_json::from_slice(&config_bytes)
         .map_err(|e| anyhow!("Config parse: {e}"))?;
+    println!("Configuration loaded successfully.");
 
     // weights
     let weight_files = if repo.get("model.safetensors.index.json").is_ok() {
@@ -98,6 +103,7 @@ fn load_qwen_model_and_tokenizer(
     } else {
         vec![repo.get("model.safetensors")?]
     };
+    println!("Weight files retrieved: {:?}", weight_files);
 
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, dtype, device);
@@ -105,10 +111,12 @@ fn load_qwen_model_and_tokenizer(
         .map_err(|e| anyhow!("Building Qwen: {e}"))?;
 
     for wf in weight_files {
+        println!("Loading weight file: {:?}", wf);
         unsafe {
             candle_ok(varmap.load(&wf))?;
         }
     }
+    println!("Weights loaded.");
     // Convert all variables to F32 if they are not already.
     // This ensures that the model parameters match the expected F32 dtype.
     {
@@ -119,6 +127,7 @@ fn load_qwen_model_and_tokenizer(
             }
         }
     }
+    println!("All weights converted to F32.");
     
 
     Ok((varmap, model, tokenizer, config))
