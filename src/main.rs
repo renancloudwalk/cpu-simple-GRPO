@@ -115,7 +115,7 @@ fn load_qwen_model_and_tokenizer(
         let mut data_lock = varmap.data().lock().unwrap();
         for var in data_lock.values_mut() {
             if var.dtype() != DType::F32 {
-                *var = candle_ok(var.to_dtype(DType::F32))?;
+                *var = Var::from_tensor(candle_ok(var.to_dtype(DType::F32))?);
             }
         }
     }
