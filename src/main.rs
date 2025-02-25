@@ -37,6 +37,12 @@ use candle_examples::hub_load_safetensors;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+macro_rules! log_line {
+    ($($arg:tt)+) => {
+        println!("[{}:{}] {}", file!(), line!(), format_args!($($arg)+))
+    };
+}
+
 /// Reference server base URL
 static REF_SERVER: &str = "http://localhost:59875";
 /// Qwen model ID
@@ -69,7 +75,7 @@ fn load_fake_gsm8k() -> Vec<QaPair> {
 fn candle_ok<T>(res: CandleResult<T>) -> Result<T> {
     match res {
         Ok(x) => Ok(x),
-        Err(e) => Err(anyhow!("Candle error: {e}")),
+        Err(e) => Err(anyhow!("[{}:{}] Candle error: {}", file!(), line!(), e)),
     }
 }
 
@@ -80,22 +86,22 @@ fn load_qwen_model_and_tokenizer(
 ) -> Result<(VarMap, QwenModel, Tokenizer, QwenConfig)> {
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(MODEL_ID.to_string(), RepoType::Model, "main".to_string()));
-    println!("Loaded HF API and repository.");
+    log_line!("Loaded HF API and repository.");
 
     // tokenizer
     let tokenizer_path = repo.get("tokenizer.json")?;
-    println!("Found tokenizer at: {:?}", tokenizer_path);
+    log_line!("Found tokenizer at: {:?}", tokenizer_path);
     let tokenizer = Tokenizer::from_file(tokenizer_path.to_str().unwrap())
-        .map_err(|e| anyhow!("Tokenizer load: {e}"))?;
-    println!("Tokenizer loaded successfully.");
+        .map_err(|e| anyhow!("[{}:{}] Tokenizer load: {}", file!(), line!(), e))?;
+    log_line!("Tokenizer loaded successfully.");
 
     // config
     let config_path = repo.get("config.json")?;
-    println!("Found config at: {:?}", config_path);
+    log_line!("Found config at: {:?}", config_path);
     let config_bytes = std::fs::read(&config_path)?;
     let config: QwenConfig = serde_json::from_slice(&config_bytes)
-        .map_err(|e| anyhow!("Config parse: {e}"))?;
-    println!("Configuration loaded successfully.");
+        .map_err(|e| anyhow!("[{}:{}] Config parse: {}", file!(), line!(), e))?;
+    log_line!("Configuration loaded successfully.");
 
     // Always use F32 for dtype
     let dtype = DType::F32;
@@ -104,7 +110,7 @@ fn load_qwen_model_and_tokenizer(
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, dtype, device);
     let model = candle_ok(QwenModel::new(&config, vb))?;
-    println!("Empty model created.");
+    log_line!("Empty model created.");
 
     // Now manually load the tensors from safetensors with conversion
     let weight_files = if repo.get("model.safetensors.index.json").is_ok() {
@@ -112,11 +118,11 @@ fn load_qwen_model_and_tokenizer(
     } else {
         vec![repo.get("model.safetensors")?]
     };
-    println!("Weight files retrieved: {:?}", weight_files);
+    log_line!("Weight files retrieved: {:?}", weight_files);
 
     // Let's try to load them one by one with conversion
     for wf in weight_files {
-        println!("Loading weight file: {:?}", wf);
+        log_line!("Loading weight file: {:?}", wf);
 
         // Load the safetensors without using VarMap's load method
         let tensors = candle_ok(candle_core::safetensors::load(&wf, &device))?;
@@ -142,7 +148,7 @@ fn load_qwen_model_and_tokenizer(
             }
         }
     }
-    println!("Weights loaded and converted to F32.");
+    log_line!("Weights loaded and converted to F32.");
 
     Ok((varmap, model, tokenizer, config))
 }
@@ -184,7 +190,7 @@ fn generate_once(
     device: &Device
 ) -> Result<String> {
     let enc = tokenizer.encode(&*prompt, true)
-        .map_err(|e| anyhow!("Tokenize: {e}"))?;
+        .map_err(|e| anyhow!("[{}:{}] Tokenize: {}", file!(), line!(), e))?;
     let mut tokens: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
     let prompt_len = tokens.len();
 
@@ -213,7 +219,7 @@ fn generate_once(
     let new_tokens = &tokens[prompt_len..];
     let new_t_u32: Vec<u32> = new_tokens.iter().map(|&x| x as u32).collect();
     let ans = tokenizer.decode(new_t_u32.as_slice(), true)
-        .map_err(|e| anyhow!("Decode: {e}"))?;
+        .map_err(|e| anyhow!("[{}:{}] Decode: {}", file!(), line!(), e))?;
     Ok(ans)
 }
 
@@ -259,7 +265,7 @@ fn generate_mode(
     client: &Client,
     iters: usize
 ) -> Result<()> {
-    println!("enter generate_mode");
+    log_line!("enter generate_mode");
     let t0 = Instant::now();
     let mut rng = StdRng::from_entropy();
 
@@ -281,7 +287,7 @@ fn generate_mode(
             let sys = "You are a helpful assistant. Provide <think>..</think><answer>..</answer>.";
             let prompt_text = format!("{sys}\nQ: {}\nA:", qa.question);
             let enc = tokenizer.encode(&*prompt_text, true)
-                .map_err(|e| anyhow!("Prompt encode: {e}"))?;
+                .map_err(|e| anyhow!("[{}:{}] Prompt encode: {}", file!(), line!(), e))?;
             let p_len = enc.get_ids().len();
             if p_len>MAX_PROMPT_LENGTH { continue; }
             used_plen = p_len;
@@ -291,7 +297,7 @@ fn generate_mode(
                 let r = local_correct_reward(&qa.answer, &ans) + local_format_reward(&ans);
                 // merge
                 let cenc = tokenizer.encode(&*ans, false)
-                    .map_err(|e| anyhow!("completion encode: {e}"))?;
+                    .map_err(|e| anyhow!("[{}:{}] completion encode: {}", file!(), line!(), e))?;
                 let mut row = Vec::with_capacity(p_len + cenc.get_ids().len());
                 row.extend(enc.get_ids().iter().map(|&x| x as i64));
                 row.extend(cenc.get_ids().iter().map(|&x| x as i64));
@@ -332,12 +338,12 @@ fn generate_mode(
             eprintln!("upload error: {e}");
         }
         if i==0 {
-            println!("sample => rewards= {:?}", all_rewards);
+            log_line!("sample => rewards= {:?}", all_rewards);
         }
     }
 
     let dt = t0.elapsed().as_secs_f32();
-    println!("exit generate_mode in {dt:.2}s");
+    log_line!("exit generate_mode in {dt:.2}s");
     Ok(())
 }
 
@@ -504,7 +510,7 @@ fn talk_to_model(
     tokenizer: &Tokenizer,
     device: &Device
 ) -> Result<()> {
-    println!("Interactive REPL. 'quit' or empty => exit.");
+    log_line!("Interactive REPL. 'quit' or empty => exit.");
     let mut line = String::new();
     loop {
         print!("\nUser> ");
@@ -519,7 +525,7 @@ fn talk_to_model(
         let sys = "You are a helpful assistant. Provide <think>..</think><answer>..</answer>.";
         let prompt = format!("{sys}\nQ: {input}\nA:");
         let ans = generate_once(policy, tokenizer, &prompt, 64, device)?;
-        println!("Assistant> {ans}");
+        log_line!("Assistant> {ans}");
     }
     Ok(())
 }
@@ -529,10 +535,10 @@ fn main() -> Result<()> {
     let device = Device::Cpu;
     let dtype = DType::F32;
 
-    println!("Loading Qwen with Candle 0.8.1 on CPU...");
+    log_line!("Loading Qwen with Candle 0.8.1 on CPU...");
     let (mut varmap, mut policy_model, tokenizer, _cfg) =
         load_qwen_model_and_tokenizer(&device, dtype)?;
-    println!("Model loaded. AdamW...");
+    log_line!("Model loaded. AdamW...");
     let vars = varmap.all_vars();
     let mut optimizer = candle_ok(AdamW::new_lr(vars, LR))
         .map_err(|e| anyhow!("AdamW new_lr: {e}"))?;
@@ -552,26 +558,26 @@ fn main() -> Result<()> {
         let batch = maybe_batch.unwrap();
         let loss_t = grpo_step(&mut policy_model, &batch, &device)?;
         let loss_val = f32::try_from(&loss_t)?;
-        println!("Step {step}/{ALL_STEPS}, loss={loss_val:.4}");
+        log_line!("Step {step}/{ALL_STEPS}, loss={loss_val:.4}");
 
         let grads = candle_ok(loss_t.backward())?;
         candle_ok(optimizer.step(&grads))?;
 
         if step % SAVE_STEPS == 0 {
             let ckpt = format!("step_{step}.safetensors");
-            println!("Saving {ckpt}...");
+            log_line!("Saving {ckpt}...");
             unsafe {
                 candle_ok(varmap.save(&ckpt))?;
             }
         }
     }
 
-    println!("Saving final to final.safetensors...");
+    log_line!("Saving final to final.safetensors...");
     unsafe {
         candle_ok(varmap.save("final.safetensors"))?;
     }
-    println!("Done. Interactive REPL...");
+    log_line!("Done. Interactive REPL...");
     talk_to_model(&mut policy_model, &tokenizer, &device)?;
-    println!("All done!");
+    log_line!("All done!");
     Ok(())
 }
