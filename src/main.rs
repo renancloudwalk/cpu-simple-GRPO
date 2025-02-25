@@ -28,7 +28,7 @@ use rand::{rngs::StdRng, SeedableRng, seq::SliceRandom};
 use regex::Regex;
 
 // Candle 0.8.1
-use candle_core::{Device, DType, Tensor};
+use candle_core::{Device, DType, Tensor, Var};
 use candle_core::Result as CandleResult; // keep Candle's result type distinct
 use candle_nn::{VarMap, VarBuilder, Optimizer};
 use candle_nn::optim::AdamW;
