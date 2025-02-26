@@ -107,12 +107,9 @@ fn load_qwen_model_and_tokenizer(
 
     // Always use F32 for dtype
     let dtype = DType::F32;
-
-    // Create the model with a temp varmap first
+    
+    // Create an empty varmap; weights will be loaded into this varmap
     let mut varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, dtype, device);
-    let model = candle_ok(QwenModel::new(&config, vb))?;
-    log_line!("Empty model created.");
 
     // Now manually load the tensors from safetensors with conversion
     let weight_files = if repo.get("model.safetensors.index.json").is_ok() {
@@ -151,6 +148,11 @@ fn load_qwen_model_and_tokenizer(
         }
     }
     log_line!("Weights loaded and converted to F32.");
+
+    // Create the model using the fully loaded varmap
+    let vb = VarBuilder::from_varmap(&varmap, dtype, device);
+    let model = candle_ok(QwenModel::new(&config, vb))?;
+    log_line!("Model constructed with loaded weights.");
 
     Ok((varmap, model, tokenizer, config))
 }
