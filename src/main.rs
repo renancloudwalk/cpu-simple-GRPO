@@ -207,7 +207,7 @@ fn generate_once(
 
         // The simplest approach is to pass None for the mask and let the model
         // generate its own proper mask internally
-        let logits = candle_ok(model.forward(&input_t, seq_len, None))?;
+        let logits = candle_ok(model.forward(&input_t, seq_len.saturating_sub(1), None))?;
 
         let dims = logits.shape().dims();
         if dims.len()!=3 { break; }
