@@ -200,19 +200,25 @@ fn generate_once(
         let shape = [1, tokens.len()];
         let input_t = candle_ok(Tensor::new(tokens.as_slice(), device))?
             .reshape(&shape)?;
-        let logits = candle_ok(model.forward(&input_t, tokens.len().saturating_sub(1), None))?;
+
+        // Generate a causal mask using integers (U8) rather than floats
+        // This should work for a where-cond operation
+        let seq_len = tokens.len();
+
+        // The simplest approach is to pass None for the mask and let the model
+        // generate its own proper mask internally
+        let logits = candle_ok(model.forward(&input_t, seq_len.saturating_sub(1), None))?;
+
         let dims = logits.shape().dims();
         if dims.len()!=3 { break; }
         let seq_len = dims[1];
         let vocab_sz = dims[2];
         if seq_len<1 { break; }
 
-        // narrow => last => axis=1 => from seq_len-1..1
+        // Process the last token's logits
         let last_slice = candle_ok(logits.narrow(1, seq_len-1, 1))?; // shape [1,1,vocab]
-        // flatten => shape [vocab_sz]
         let last_1d = candle_ok(last_slice.reshape(&[vocab_sz]))?;
         let mut arr = candle_ok(last_1d.to_vec1::<f32>())?;
-        // log_softmax_1d
         log_softmax_1d(&mut arr);
         let best_idx = argmax_1d(&arr) as i64;
         tokens.push(best_idx);
