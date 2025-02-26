@@ -104,6 +104,13 @@ fn load_qwen_model_and_tokenizer(
     let config: QwenConfig = serde_json::from_slice(&config_bytes)
         .map_err(|e| anyhow!("[{}:{}] Config parse: {}", file!(), line!(), e))?;
     log_line!("Configuration loaded successfully.");
+    // Adjust config.rotary_dim to match the expected per-head dimension.
+    // The expected rotary dimension is calculated as hidden_size / num_attention_heads.
+    let expected_rotary_dim = config.hidden_size / config.num_attention_heads;
+    if config.rotary_dim != expected_rotary_dim {
+        log_line!("Adjusting config.rotary_dim from {} to {}", config.rotary_dim, expected_rotary_dim);
+        config.rotary_dim = expected_rotary_dim;
+    }
 
     // Always use F32 for dtype
     let dtype = DType::F32;
