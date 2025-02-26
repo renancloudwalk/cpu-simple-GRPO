@@ -207,6 +207,9 @@ fn generate_once(
         .map_err(|e| anyhow!("[{}:{}] Tokenize: {}", file!(), line!(), e))?;
     let mut tokens: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
     let prompt_len = tokens.len();
+    let pad_token = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
+    // Append a dummy token to fix rotary embedding shape mismatch
+    tokens.push(pad_token);
 
     for _ in 0..max_tokens {
         let shape = [1, tokens.len()];
@@ -236,6 +239,8 @@ fn generate_once(
         tokens.push(best_idx);
     }
 
+    // Remove the trailing dummy token before decoding
+    tokens.pop();
     let new_tokens = &tokens[prompt_len..];
     let new_t_u32: Vec<u32> = new_tokens.iter().map(|&x| x as u32).collect();
     let ans = tokenizer.decode(new_t_u32.as_slice(), true)
