@@ -195,54 +195,85 @@ fn argmax_1d(arr: &[f32]) -> usize {
     best
 }
 
-/// A single generation pass (greedy)
-fn generate_once(
+/// True incremental decoding for Qwen2, using the internal K/V cache.
+///
+/// - `model`: your QwenModel (which includes the internal self-attn K/V).
+/// - `tokenizer`: obviously your Qwen tokenizer.
+/// - `prompt`: the full text prompt (all initial tokens).
+/// - `max_tokens`: how many new tokens to generate (not counting the prompt).
+/// - `device`: Candle device.
+///
+/// Returns the newly generated text, appended after the prompt.
+pub fn generate_once(
     model: &mut QwenModel,
     tokenizer: &Tokenizer,
     prompt: &str,
     max_tokens: usize,
-    device: &Device
+    device: &Device,
 ) -> Result<String> {
-    let enc = tokenizer.encode(&*prompt, true)
-        .map_err(|e| anyhow!("[{}:{}] Tokenize: {}", file!(), line!(), e))?;
-    let mut tokens: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
-    let prompt_len = tokens.len();
-    let pad_token = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
-    // Append a dummy token to fix rotary embedding shape mismatch
-    tokens.push(pad_token);
+    // 1) Clear old K/V.
+    model.clear_kv_cache();
 
-    for _ in 0..max_tokens {
-        // Remove the dummy token before forward pass
-        tokens.pop();
-        let shape = [1, tokens.len()];
-        let input_t = candle_ok(Tensor::new(tokens.as_slice(), device))?
-            .reshape(&shape)?;
-    
-        // Generate logits as before
-        let logits = candle_ok(model.forward(&input_t, tokens.len().saturating_sub(1), None))?;
-        let dims = logits.shape().dims();
-        if dims.len()!=3 { break; }
-        let seq_len = dims[1];
-        let vocab_sz = dims[2];
-        if seq_len<1 { break; }
-    
-        // Process the last token's logits
-        let last_slice = candle_ok(logits.narrow(1, seq_len-1, 1))?; // shape [1,1,vocab]
-        let last_1d = candle_ok(last_slice.reshape(&[vocab_sz]))?;
-        let mut arr = candle_ok(last_1d.to_vec1::<f32>())?;
-        log_softmax_1d(&mut arr);
-        let best_idx = argmax_1d(&arr) as i64;
-        // Append the generated token and a new dummy token
-        tokens.push(best_idx);
-        tokens.push(pad_token);
+    // 2) Encode the prompt. We explicitly map the error to anyhow.
+    let enc = tokenizer
+        .encode(prompt, /* add_special_tokens = */ true)
+        .map_err(anyhow::Error::msg)?;
+    let mut tokens: Vec<i64> = enc.get_ids().iter().map(|&id| id as i64).collect();
+    let prompt_len = tokens.len();
+
+    // 3) If there's a prompt, feed it all at once (offset = 0).
+    //    This populates the K/V cache with the entire prefix.
+    if prompt_len > 0 {
+        let input_t = Tensor::new(tokens.as_slice(), device)?.reshape(&[1, prompt_len])?;
+        // forward(..., offset=0, attention_mask=None)
+        model.forward(&input_t, 0, None)?;
     }
 
-    // Remove the trailing dummy token before decoding
-    tokens.pop();
+    // Keep track of how many tokens we've fed so far.
+    // If we fed `prompt_len` tokens, offset = prompt_len.
+    let mut offset = prompt_len;
+
+    // 4) Generate `max_tokens` new tokens, one by one.
+    for _ in 0..max_tokens {
+        // We'll feed just the *last* token in shape [1,1].
+        // If the prompt was empty, you might feed a special BOS or skip.
+        let last_token_id = if tokens.is_empty() {
+            // E.g. use your model's <bos> token. We'll just do 0 for example.
+            0
+        } else {
+            *tokens.last().unwrap()
+        };
+
+        let input_t = Tensor::new(&[last_token_id], device)?.reshape(&[1, 1])?;
+        // Forward with offset = how many tokens are in the cache so far.
+        let logits = model.forward(&input_t, offset, None)?;
+        offset += 1;
+
+        // 5) The shape should be [batch=1, seq=1, vocab_size].
+        let shape = logits.shape().dims();
+        if shape.len() != 3 {
+            eprintln!("Unexpected logits shape {:?}", shape);
+            break;
+        }
+        let vocab_sz = shape[2];
+        // Flatten the last token's logits => [vocab_sz].
+        let last_slice = logits.narrow(1, shape[1] - 1, 1)?;
+        let flattened = last_slice.reshape(&[vocab_sz])?;
+        let mut arr = flattened.to_vec1::<f32>()?;
+
+        // Argmax (or sample).
+        log_softmax_1d(&mut arr);
+        let next_id = argmax_1d(&arr) as i64;
+        tokens.push(next_id);
+    }
+
+    // 6) Decode only the newly generated portion, i.e. after the prompt.
     let new_tokens = &tokens[prompt_len..];
-    let new_t_u32: Vec<u32> = new_tokens.iter().map(|&x| x as u32).collect();
-    let ans = tokenizer.decode(new_t_u32.as_slice(), true)
-        .map_err(|e| anyhow!("[{}:{}] Decode: {}", file!(), line!(), e))?;
+    let new_tokens_u32: Vec<u32> = new_tokens.iter().map(|&x| x as u32).collect();
+    let ans = tokenizer
+        .decode(&new_tokens_u32, /* skip_special_tokens=*/ true)
+        .map_err(anyhow::Error::msg)?;
+
     Ok(ans)
 }
 
