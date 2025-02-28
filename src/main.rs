@@ -117,7 +117,7 @@ fn load_qwen_model_and_tokenizer(
 
     // Always use F32 for dtype
     let dtype = DType::F32;
-    
+
     // Create an empty varmap; weights will be loaded into this varmap
     let mut varmap = VarMap::new();
 
@@ -167,6 +167,86 @@ fn load_qwen_model_and_tokenizer(
     Ok((varmap, model, tokenizer, config))
 }
 
+/// We'll do a parallel decode across `num_completions`.
+/// Candle handles the batch dimension, so each row is one completion.
+fn generate_multi_completions(
+    model: &mut QwenModel,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    num_completions: usize,
+    max_tokens: usize,
+    device: &Device,
+) -> Result<Vec<String>> {
+    model.clear_kv_cache();
+
+    // Tokenize the prompt once
+    let enc = tokenizer
+        .encode(prompt, /* add_special_tokens= */ true)
+        .map_err(|e| anyhow!("Tokenizer encode error: {}", e))?;
+    let prompt_ids: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
+    let prompt_len = prompt_ids.len();
+
+    // Create `num_completions` copies => shape [num_completions, prompt_len]
+    let mut sequences = Vec::with_capacity(num_completions);
+    for _ in 0..num_completions {
+        sequences.push(prompt_ids.clone());
+    }
+    // Flatten
+    let batch_input: Vec<i64> = sequences.iter().flatten().copied().collect();
+    let shape = [num_completions as i64, prompt_len as i64];
+    let input_t = Tensor::new(&batch_input[..], device)?.reshape(&shape)?;
+
+    // One pass to set up the KV cache for the entire prompt
+    model.forward(&input_t, 0, None)?;
+    let mut offset = prompt_len;
+
+    // Generate up to max_tokens, all completions in parallel
+    for _step in 0..max_tokens {
+        // Gather last token from each row => shape [num_completions, 1]
+        let mut last_tokens = Vec::with_capacity(num_completions);
+        for row in &sequences {
+            last_tokens.push(*row.last().unwrap_or(&0));
+        }
+
+        let shape = [num_completions as i64, 1];
+        let input_t = Tensor::new(&last_tokens[..], device)?.reshape(&shape)?;
+        let logits = model.forward(&input_t, offset, None)?;
+        offset += 1;
+
+        // logits => [num_completions, 1, vocab_size]
+        let dims = logits.shape().dims();
+        if dims.len() != 3 {
+            break; // unexpected
+        }
+        let vocab_size = dims[2];
+
+        // Flatten to [num_completions, vocab_size]
+        let last_slice = logits.narrow(1, dims[1] - 1, 1)?;
+        let flatten = last_slice.reshape(&[num_completions as i64, vocab_size as i64])?;
+        let arr = flatten.to_vec2::<f32>()?;
+
+        // For each row, pick next token (greedy).
+        // If you want sampling, adapt the distribution.
+        for (i, mut row_data) in arr.into_iter().enumerate() {
+            log_softmax_1d(&mut row_data);
+            let next_id = argmax_1d(&row_data) as i64;
+            sequences[i].push(next_id);
+        }
+    }
+
+    // Decode only the newly generated portion
+    let mut results = Vec::with_capacity(num_completions);
+    for row in sequences {
+        let gen_tokens = &row[prompt_len..];
+        let gen_u32: Vec<u32> = gen_tokens.iter().map(|&x| x as u32).collect();
+        let text = tokenizer
+            .decode(&gen_u32, true)
+            .map_err(|e| anyhow!("Tokenizer decode error: {}", e))?;
+        results.push(text);
+    }
+    Ok(results)
+}
+
 /// 1D log_softmax in an array
 fn log_softmax_1d(vals: &mut [f32]) {
     let mx = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -177,7 +257,6 @@ fn log_softmax_1d(vals: &mut [f32]) {
     }
     let lnz = sumexp.ln();
     for v in vals.iter_mut() {
-        // log(prob) = log( e^(x-mx)/sumexp ) + mx = x - lnz
         *v = v.ln() - lnz + mx;
     }
 }
@@ -224,8 +303,7 @@ pub fn generate_once(
     // 3) If there's a prompt, feed it all at once (offset = 0).
     //    This populates the K/V cache with the entire prefix.
     if prompt_len > 0 {
-        let input_t = Tensor::new(tokens.as_slice(), device)?.reshape(&[1, prompt_len])?;
-        // forward(..., offset=0, attention_mask=None)
+        let input_t = Tensor::new(&tokens[..], device)?.reshape((1, prompt_len))?;
         model.forward(&input_t, 0, None)?;
     }
 
@@ -234,18 +312,15 @@ pub fn generate_once(
     let mut offset = prompt_len;
 
     // 4) Generate `max_tokens` new tokens, one by one.
-    for _ in 0..max_tokens {
+    for i in 0..max_tokens {
         // We'll feed just the *last* token in shape [1,1].
-        // If the prompt was empty, you might feed a special BOS or skip.
         let last_token_id = if tokens.is_empty() {
-            // E.g. use your model's <bos> token. We'll just do 0 for example.
             0
         } else {
             *tokens.last().unwrap()
         };
 
-        let input_t = Tensor::new(&[last_token_id], device)?.reshape(&[1, 1])?;
-        // Forward with offset = how many tokens are in the cache so far.
+        let input_t = Tensor::new(&[last_token_id][..], device)?.reshape((1, 1))?;
         let logits = model.forward(&input_t, offset, None)?;
         offset += 1;
 
@@ -258,12 +333,13 @@ pub fn generate_once(
         let vocab_sz = shape[2];
         // Flatten the last token's logits => [vocab_sz].
         let last_slice = logits.narrow(1, shape[1] - 1, 1)?;
-        let flattened = last_slice.reshape(&[vocab_sz])?;
+        let flattened = last_slice.reshape((vocab_sz,))?;
         let mut arr = flattened.to_vec1::<f32>()?;
 
         // Argmax (or sample).
         log_softmax_1d(&mut arr);
         let next_id = argmax_1d(&arr) as i64;
+        log_line!("Step {i}/{max_tokens}");
         tokens.push(next_id);
     }
 
@@ -293,6 +369,7 @@ fn local_correct_reward(gt: &str, pred: &str) -> f32 {
         -1.0
     }
 }
+
 fn local_format_reward(pred: &str) -> f32 {
     let re = Regex::new(r"^<think>.*?</think><answer>.*?</answer>$").unwrap();
     if re.is_match(pred) {
@@ -340,22 +417,32 @@ fn generate_mode(
         for qa in picks {
             let sys = "You are a helpful assistant. Provide <think>..</think><answer>..</answer>.";
             let prompt_text = format!("{sys}\nQ: {}\nA:", qa.question);
-            let enc = tokenizer.encode(&*prompt_text, true)
+            let enc = tokenizer.encode(prompt_text.as_str(), true)
                 .map_err(|e| anyhow!("[{}:{}] Prompt encode: {}", file!(), line!(), e))?;
             let p_len = enc.get_ids().len();
             if p_len>MAX_PROMPT_LENGTH { continue; }
             used_plen = p_len;
 
-            for _ in 0..NUM_PRE_Q {
-                let ans = generate_once(policy, tokenizer, &prompt_text, 128, device)?;
+            // Now use a single multi-completions call for all answers:
+            let completions = generate_multi_completions(
+                policy,
+                tokenizer,
+                prompt_text.as_str(),
+                NUM_PRE_Q,    // how many completions
+                128,          // max tokens
+                device
+            )?;
+            for ans in completions {
                 let r = local_correct_reward(&qa.answer, &ans) + local_format_reward(&ans);
-                // merge
-                let cenc = tokenizer.encode(&*ans, false)
+
+                // Merge: combine prompt + answer tokens
+                let cenc = tokenizer.encode(ans.as_str(), false)
                     .map_err(|e| anyhow!("[{}:{}] completion encode: {}", file!(), line!(), e))?;
                 let mut row = Vec::with_capacity(p_len + cenc.get_ids().len());
                 row.extend(enc.get_ids().iter().map(|&x| x as i64));
                 row.extend(cenc.get_ids().iter().map(|&x| x as i64));
-                if row.len()>max_len {
+
+                if row.len() > max_len {
                     max_len = row.len();
                 }
                 all_rows.push(row);
@@ -441,16 +528,13 @@ fn grpo_step(
     let mut total_loss = 0.0;
 
     for bi in 0..b {
-        // Extract this single sequence
         let start_idx = bi * l;
         let end_idx = start_idx + l;
         let seq_slice = &batch.inputs[start_idx..end_idx];
 
-        // Create a single sequence tensor
-        let input_t = candle_ok(Tensor::new(seq_slice, device))?
+        let input_t = candle_ok(Tensor::new(&seq_slice[..], device))?
             .reshape(&[1, l])?;
 
-        // Forward pass for just this sequence
         let logits = candle_ok(policy.forward(&input_t, (l-1).max(0), None))?;
         let logits_dims = logits.shape().dims();
 
@@ -458,65 +542,55 @@ fn grpo_step(
             continue; // Skip this sequence if dimensions are wrong
         }
 
-        // Get logits for all but the last position
         let seqm1 = logits_dims[1] - 1;
         let vocab = logits_dims[2];
 
-        // Get the logits for predicting next tokens (we'll get tokens 1 to l from positions 0 to l-1)
         let logits_for_next = candle_ok(logits.narrow(1, 0, seqm1))?;
-
-        // Get the actual next tokens (tokens 1 to l)
         let next_tokens = candle_ok(input_t.narrow(1, 1, l-1))?;
 
-        // Apply log_softmax to the logits
         let logits_vec = candle_ok(logits_for_next.to_vec3::<f32>())?;
         let mut logprobs_vec = logits_vec.clone();
 
-        // Apply log_softmax per position
         for pos in 0..seqm1 {
             log_softmax_1d(&mut logprobs_vec[0][pos]);
         }
 
-        // Convert back to tensor
         let logprobs = candle_ok(Tensor::new(logprobs_vec.clone(), device))?;
-
-        // Get the actual next token ids
         let next_ids = candle_ok(next_tokens.to_vec2::<i64>())?;
 
-        // Gather the log probs for the actual tokens
         let mut token_logprobs = Vec::with_capacity(seqm1);
         for pos in 0..seqm1 {
             let token_id = next_ids[0][pos];
-            let safe_id = if token_id < 0 { 0 }
-                          else if token_id as usize >= vocab { vocab - 1 }
-                          else { token_id as usize };
+            let safe_id = if token_id < 0 {
+                0
+            } else if token_id as usize >= vocab {
+                vocab - 1
+            } else {
+                token_id as usize
+            };
 
             let lp = logprobs_vec[0][pos][safe_id];
             token_logprobs.push(lp);
         }
 
-        // Get the completion portion only
         let start_pos = batch.plen.saturating_sub(1).min(seqm1);
         let comp_pos = seqm1 - start_pos;
 
         if comp_pos == 0 {
-            continue; // No completion tokens to process
+            continue;
         }
 
         let completion_logprobs = &token_logprobs[start_pos..];
 
-        // Reference log probs for this sequence (already for completion portion)
         let ref_start = bi * comp_len;
         let ref_end = ref_start + comp_len;
         let ref_logprobs = &batch.refs[ref_start..ref_end];
 
-        // Ensure lengths match
         let min_len = completion_logprobs.len().min(ref_logprobs.len());
         if min_len == 0 {
             continue;
         }
 
-        // Calculate KL divergence: exp(ref-new) - (ref-new) - 1
         let mut kl_terms = Vec::with_capacity(min_len);
         for i in 0..min_len {
             let diff = ref_logprobs[i] - completion_logprobs[i];
@@ -524,34 +598,29 @@ fn grpo_step(
             kl_terms.push(kl);
         }
 
-        // Get reward for this sequence
         let reward = batch.rewards[bi];
-
-        // For advantage, we'd normally compute within a group
-        // For simplicity, just use the raw reward here
         let advantage = reward;
 
-        // Calculate policy objective: advantage * logprob
         let mut policy_terms = Vec::with_capacity(min_len);
         for i in 0..min_len {
             policy_terms.push(advantage * completion_logprobs[i]);
         }
 
-        // Combine policy objective and KL penalty
         let mut combined_terms = Vec::with_capacity(min_len);
         for i in 0..min_len {
             combined_terms.push(policy_terms[i] - BETA * kl_terms[i]);
         }
 
-        // Average and negate (for minimization)
         let seq_loss = -combined_terms.iter().sum::<f32>() / (min_len as f32);
         total_loss += seq_loss;
     }
 
-    // Average across all sequences
-    let final_loss = if b > 0 { total_loss / (b as f32) } else { 0.0 };
+    let final_loss = if b > 0 {
+        total_loss / (b as f32)
+    } else {
+        0.0
+    };
 
-    // Create a scalar tensor
     let scalar_t = candle_ok(Tensor::new(&[final_loss], device))?
         .reshape(&[])?;
 
